@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "WebSearch",
+      "WebFetch(domain:console.groq.com)",
+      "WebFetch(domain:groq.com)",
+      "WebFetch(domain:community.groq.com)",
+      "mcp__plugin_context7_context7__query-docs",
+      "WebFetch(domain:www.airtel.in)",
+      "WebFetch(domain:telecomtalk.info)",
+      "WebFetch(domain:www.cashify.in)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\(''groq_engine.py''\\).read\\(\\)\\); print\\(''groq_engine.py: OK''\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\(''app.py''\\).read\\(\\)\\); print\\(''app.py: OK''\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\(''chatbot.py''\\).read\\(\\)\\); print\\(''chatbot.py: OK''\\)\")",
+      "Bash(pip3 install:*)"
+    ]
+  },
+  "enabledPlugins": {
+    "context7@claude-plugins-official": true
+  }
+}

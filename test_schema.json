@@ -1,0 +1,20 @@
+{
+    "title": "languages",
+    "type": "object",
+    "properties": {
+      "languages": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "year": { "type": "integer" }
+          },
+          "required": ["name", "year"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["languages"],
+    "additionalProperties": false
+  }
