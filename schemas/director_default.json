@@ -1,0 +1,92 @@
+{
+  "title": "director_analysis",
+  "type": "object",
+  "properties": {
+    "intent": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["question", "instruction", "creative", "debug", "conversation"]
+        },
+        "complexity": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        },
+        "topic": {
+          "type": "string",
+          "description": "Brief topic label (2-5 words)"
+        }
+      },
+      "required": ["type", "complexity", "topic"],
+      "additionalProperties": false
+    },
+    "response_analysis": {
+      "type": "object",
+      "properties": {
+        "sentiment": {
+          "type": "string",
+          "enum": ["neutral", "positive", "negative", "cautious"]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "contains_code": {
+          "type": "boolean"
+        },
+        "language_detected": {
+          "type": "string",
+          "description": "ISO 639-1 language code (e.g. en, hi, ar)"
+        },
+        "key_entities": {
+          "type": "array",
+          "items": { "type": "string" },
+          "maxItems": 5
+        }
+      },
+      "required": ["sentiment", "confidence", "contains_code", "language_detected", "key_entities"],
+      "additionalProperties": false
+    },
+    "suggestions": {
+      "type": "object",
+      "properties": {
+        "follow_ups": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "maxItems": 3,
+          "description": "Suggested follow-up questions for the user"
+        },
+        "related_topics": {
+          "type": "array",
+          "items": { "type": "string" },
+          "maxItems": 3
+        }
+      },
+      "required": ["follow_ups", "related_topics"],
+      "additionalProperties": false
+    },
+    "guardrails": {
+      "type": "object",
+      "properties": {
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["none", "off_topic", "sensitive", "factual_risk"]
+          }
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional explanation for flags"
+        }
+      },
+      "required": ["flags", "note"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["intent", "response_analysis", "suggestions", "guardrails"],
+  "additionalProperties": false
+}

@@ -1,2 +1,7 @@
 groq>=0.28.0
 streamlit>=1.35.0
+
+# Optional providers (auto-detected at runtime)
+# openai>=1.30.0        # OpenAI (GPT-4.1 family) — Director default
+# anthropic>=0.30.0     # Anthropic (Claude family) — future
+# google-genai>=1.0.0   # Google (Gemini family) — future

@@ -23,7 +23,16 @@ import time
 import argparse
 import re
 import json
+from concurrent.futures import ThreadPoolExecutor
 from groq import Groq
+
+# Optional: Director support (graceful fallback if not available)
+try:
+    from providers.registry import get_registry
+    from director import Director, DirectorResult
+    DIRECTOR_AVAILABLE = True
+except ImportError:
+    DIRECTOR_AVAILABLE = False
 
 
 # ── Model Registry ──────────────────────────────────────────────────────────
@@ -176,7 +185,8 @@ class GroqChatbot:
     def __init__(self, model_id: str, reasoning_effort: str = None, show_reasoning: bool = True,
                  system_prompt: str = None, system_prompt_file: str = None,
                  json_schema: dict = None, json_mode: bool = False,
-                 max_completion_tokens: int = 4096):
+                 max_completion_tokens: int = 4096,
+                 director_enabled: bool = False):
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
             print(f"\n{C.RED}✗ GROQ_API_KEY not set!{C.RESET}")
@@ -227,6 +237,19 @@ class GroqChatbot:
                 self.reasoning_effort = reasoning_effort
         else:
             self.reasoning_effort = self.model_info["default_effort"]
+
+        # Director (optional)
+        self.director = None
+        self.director_stats = {"requests": 0, "passes": 0, "total_ms": 0, "total_cost": 0.0}
+        if director_enabled and DIRECTOR_AVAILABLE:
+            registry = get_registry()
+            result = registry.find_default_director()
+            if result:
+                provider, model_info = result
+                self.director = Director(provider=provider, model_id=model_info.id)
+                print(f"  {C.GREEN}✓ Director: {model_info.name} ({provider.name}){C.RESET}")
+            else:
+                print(f"  {C.YELLOW}⚠ No Director model available. Set OPENAI_API_KEY for best results.{C.RESET}")
 
     def _build_request_params(self, messages: list) -> dict:
         """Build the API request parameters based on model type."""
@@ -563,10 +586,72 @@ class GroqChatbot:
         except Exception as e:
             print(f" failed: {e}")
 
+    def _print_director_insights(self, result):
+        """Print Director analysis results in the terminal."""
+        if not DIRECTOR_AVAILABLE:
+            return
+        if not result.success:
+            print(f"  {C.DIM}📋 Director failed: {result.error}{C.RESET}")
+            return
+
+        self.director_stats["requests"] += 1
+        self.director_stats["total_ms"] += result.total_ms
+        if result.schema_valid:
+            self.director_stats["passes"] += 1
+
+        # Compute cost
+        if self.director:
+            model = self.director.provider.get_model(self.director.model_id)
+            if model:
+                cost = model.estimate_cost(result.prompt_tokens, result.completion_tokens)
+                self.director_stats["total_cost"] += cost
+
+        data = result.data
+        if not data:
+            return
+
+        print(f"  {C.DIM}{'─' * 60}{C.RESET}")
+        print(f"  {C.CYAN}📋 Director{C.RESET} ({self.director.model_id}, {result.total_ms:.0f}ms, schema: {'✅' if result.schema_valid else '⚠️'})")
+
+        # Intent
+        intent = data.get("intent", {})
+        if intent:
+            print(f"  {C.DIM}   Intent: {intent.get('type', '?')} ({intent.get('complexity', '?')}) │ Topic: {intent.get('topic', '?')}{C.RESET}")
+
+        # Analysis
+        analysis = data.get("response_analysis", {})
+        if analysis:
+            entities = analysis.get("key_entities", [])
+            conf = analysis.get("confidence", 0)
+            lang = analysis.get("language_detected", "?")
+            print(f"  {C.DIM}   Confidence: {conf:.0%} │ Language: {lang} │ Sentiment: {analysis.get('sentiment', '?')}{C.RESET}")
+            if entities:
+                print(f"  {C.DIM}   Entities: {', '.join(entities)}{C.RESET}")
+
+        # Follow-ups
+        suggestions = data.get("suggestions", {})
+        follow_ups = suggestions.get("follow_ups", [])
+        if follow_ups:
+            print(f"  {C.DIM}   Follow-ups:{C.RESET}")
+            for q in follow_ups:
+                print(f"  {C.DIM}     → {q}{C.RESET}")
+
+        # Guardrails
+        guardrails = data.get("guardrails", {})
+        flags = guardrails.get("flags", ["none"])
+        if flags and flags != ["none"]:
+            print(f"  {C.YELLOW}   ⚠️ Flags: {', '.join(flags)}{C.RESET}")
+            note = guardrails.get("note", "")
+            if note:
+                print(f"  {C.DIM}     {note}{C.RESET}")
+
+        print(f"  {C.DIM}{'─' * 60}{C.RESET}")
+
     def run(self):
         """Run the interactive chat loop."""
         print(f"\n{C.BOLD}{C.CYAN}{'═' * 60}{C.RESET}")
-        print(f"{C.BOLD}{C.CYAN}  GROQ REASONING CHATBOT{C.RESET}")
+        title = "  ACTOR-DIRECTOR CHATBOT" if self.director else "  GROQ REASONING CHATBOT"
+        print(f"{C.BOLD}{C.CYAN}{title}{C.RESET}")
         print(f"{C.BOLD}{C.CYAN}{'═' * 60}{C.RESET}")
         print(f"  {C.WHITE}Model:     {C.YELLOW}{self.model_info['name']}{C.RESET} ({self.model_id})")
         print(f"  {C.WHITE}Speed:     {C.GREEN}{self.model_info['speed']}{C.RESET}")
@@ -583,8 +668,10 @@ class GroqChatbot:
         elif self.system_prompt:
             print(f"  {C.WHITE}Caching:   {C.RED}Not supported{C.RESET} ({self.model_info['name']} does not support caching)")
         print(f"  {C.WHITE}Multilingual: {self.model_info['multilingual_score']}")
+        if self.director:
+            print(f"  {C.WHITE}Director:  {C.GREEN}{self.director.model_id}{C.RESET} ({self.director.provider.name})")
         print(f"{C.BOLD}{C.CYAN}{'═' * 60}{C.RESET}")
-        print(f"  {C.DIM}Commands: /quit /clear /model /effort /reasoning /output /system /cache /compare /help{C.RESET}")
+        print(f"  {C.DIM}Commands: /quit /clear /model /effort /reasoning /output /director /providers /stats /help{C.RESET}")
         print(f"  {C.DIM}Supports: English, Hindi, Arabic, and 100+ more languages{C.RESET}\n")
 
         while True:
@@ -721,6 +808,82 @@ class GroqChatbot:
                     print_comparison_table()
                     continue
 
+                elif cmd == "/director":
+                    if not DIRECTOR_AVAILABLE:
+                        print(f"  {C.RED}✗ Director not available. Install provider packages.{C.RESET}\n")
+                        continue
+                    parts = user_input.split(maxsplit=1)
+                    if len(parts) < 2:
+                        if self.director:
+                            print(f"  {C.GREEN}Director: ON{C.RESET}")
+                            print(f"    Model: {self.director.model_id} ({self.director.provider.name})")
+                            ds = self.director_stats
+                            print(f"    Requests: {ds['requests']} │ Schema: {ds['passes']}/{ds['requests']}")
+                            if ds['requests'] > 0:
+                                print(f"    Avg: {ds['total_ms']/ds['requests']:.0f}ms │ Cost: ${ds['total_cost']:.6f}")
+                        else:
+                            print(f"  {C.RED}Director: OFF{C.RESET}")
+                        print(f"  {C.DIM}Usage: /director on  or  /director off{C.RESET}\n")
+                    else:
+                        arg = parts[1].strip().lower()
+                        if arg == "on":
+                            if not self.director:
+                                registry = get_registry()
+                                result = registry.find_default_director()
+                                if result:
+                                    provider, model_info = result
+                                    self.director = Director(provider=provider, model_id=model_info.id)
+                                    print(f"  {C.GREEN}✓ Director enabled: {model_info.name} ({provider.name}){C.RESET}\n")
+                                else:
+                                    print(f"  {C.RED}✗ No Director model available.{C.RESET}\n")
+                            else:
+                                print(f"  {C.DIM}Director already enabled.{C.RESET}\n")
+                        elif arg == "off":
+                            self.director = None
+                            print(f"  {C.GREEN}✓ Director disabled.{C.RESET}\n")
+                        else:
+                            print(f"  {C.RED}✗ Use: /director on  or  /director off{C.RESET}\n")
+                    continue
+
+                elif cmd == "/providers":
+                    if not DIRECTOR_AVAILABLE:
+                        print(f"  {C.RED}✗ Provider system not available.{C.RESET}\n")
+                        continue
+                    registry = get_registry()
+                    print(f"\n  {C.BOLD}Available Providers:{C.RESET}")
+                    for s in registry.provider_status():
+                        icon = f"{C.GREEN}✅{C.RESET}" if s["available"] else f"{C.RED}❌{C.RESET}"
+                        detail = f"{s['model_count']} models" if s["available"] else ("no key" if not s["has_key"] else "no package")
+                        print(f"    {icon} {C.WHITE}{s['name']:<12}{C.RESET} {detail}  ({s['env_var']})")
+                    print()
+
+                    all_models = registry.list_all_models()
+                    if all_models:
+                        print(f"  {C.BOLD}All Models:{C.RESET}")
+                        for m in all_models:
+                            roles = ", ".join(m.roles)
+                            print(f"    {C.CYAN}{m.provider}/{m.id}{C.RESET} — {m.name} [{roles}] {m.speed}")
+                    print()
+                    continue
+
+                elif cmd == "/stats":
+                    print(f"\n  {C.BOLD}Session Stats:{C.RESET}")
+                    print(f"    Actor:     {self.model_id}")
+                    print(f"    Requests:  {self.total_requests}")
+                    print(f"    Tokens:    {self.total_input_tokens:,} in / {self.total_output_tokens:,} out")
+                    if self.total_cached_tokens > 0:
+                        rate = self.total_cached_tokens * 100 // max(1, self.total_prompt_tokens)
+                        print(f"    Cache:     {self.total_cached_tokens:,}/{self.total_prompt_tokens:,} ({rate}%)")
+                    if self.director:
+                        ds = self.director_stats
+                        print(f"    Director:  {self.director.model_id}")
+                        print(f"    Dir Reqs:  {ds['requests']} │ Schema: {ds['passes']}/{ds['requests']}")
+                        print(f"    Dir Cost:  ${ds['total_cost']:.6f}")
+                        if ds['requests'] > 0:
+                            print(f"    Dir Avg:   {ds['total_ms']/ds['requests']:.0f}ms")
+                    print()
+                    continue
+
                 elif cmd == "/help":
                     print(f"""
   {C.BOLD}Available Commands:{C.RESET}
@@ -728,6 +891,9 @@ class GroqChatbot:
     {C.CYAN}/effort [level]{C.RESET}   — Set reasoning effort (low/medium/high or none/default)
     {C.CYAN}/reasoning{C.RESET}        — Toggle reasoning display ON/OFF
     {C.CYAN}/output [mode]{C.RESET}    — Switch output mode: json or stream
+    {C.CYAN}/director [on/off]{C.RESET}— Toggle Director (parallel JSON analysis)
+    {C.CYAN}/providers{C.RESET}        — List available providers and models
+    {C.CYAN}/stats{C.RESET}            — Show session statistics
     {C.CYAN}/system{C.RESET}           — Show system prompt info
     {C.CYAN}/cache{C.RESET}            — Show prompt cache statistics
     {C.CYAN}/clear{C.RESET}            — Clear conversation history
@@ -754,11 +920,29 @@ class GroqChatbot:
             elif total_budget > 120000:
                 print(f"  {C.YELLOW}⚠ Context nearly full: ~{conversation_tokens} tokens used. Consider /clear.{C.RESET}")
 
-            # ── Send message ──
+            # ── Send message (Actor + optional Director in parallel) ──
+            director_future = None
+            if self.director and self.output_mode != "json":
+                # Launch Director in background before streaming
+                self.messages.append({"role": "user", "content": user_input})
+                executor = ThreadPoolExecutor(max_workers=1)
+                director_future = executor.submit(self.director.analyze, self.messages)
+                self.messages.pop()  # stream_response will re-add it
+
             if self.output_mode == "json":
                 self.structured_response(user_input)
             else:
                 self.stream_response(user_input)
+
+            # ── Show Director insights ──
+            if director_future:
+                try:
+                    dir_result = director_future.result(timeout=30)
+                    self._print_director_insights(dir_result)
+                except Exception as e:
+                    print(f"  {C.DIM}📋 Director error: {e}{C.RESET}")
+                finally:
+                    executor.shutdown(wait=False)
             print()
 
 
@@ -855,6 +1039,11 @@ Examples:
         action="store_true",
         help="Prime the prompt cache on startup (sends a lightweight request)"
     )
+    parser.add_argument(
+        "--director",
+        action="store_true",
+        help="Enable Director (parallel JSON analysis). Requires OPENAI_API_KEY or Groq GPT-OSS."
+    )
 
     args = parser.parse_args()
 
@@ -898,6 +1087,12 @@ Examples:
     # Pick model
     model_id = args.model or pick_model_interactive()
 
+    # Director flag validation
+    director_enabled = args.director
+    if director_enabled and not DIRECTOR_AVAILABLE:
+        print(f"{C.YELLOW}⚠ --director requires the provider layer. Ensure providers/ package is available.{C.RESET}")
+        director_enabled = False
+
     # Create and run chatbot
     bot = GroqChatbot(
         model_id=model_id,
@@ -908,6 +1103,7 @@ Examples:
         json_schema=json_schema,
         json_mode=args.json_mode,
         max_completion_tokens=args.max_tokens,
+        director_enabled=director_enabled,
     )
 
     # Warm cache if requested

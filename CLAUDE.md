@@ -4,37 +4,66 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A single-file Python CLI chatbot that streams responses with reasoning support from Groq's LLM API. Supports three models (Qwen3-32B, GPT-OSS 20B, GPT-OSS 120B) with hot-swapping, multilingual input, and configurable reasoning effort.
+An Actor-Director chatbot with multi-provider LLM support. Two LLMs run in parallel:
+- **Actor**: Streams user-facing responses (fast TTFT) via Groq, OpenAI, etc.
+- **Director**: Produces structured JSON metadata (intent, entities, follow-ups) via constrained decoding.
+
+Supports Groq (Qwen3, GPT-OSS) and OpenAI (GPT-4.1 family) with provider auto-detection.
 
 ## Running
 
 ```bash
 # Install
 pip install -r requirements.txt
+pip install openai  # optional: enables GPT-4.1 Director
 
-# Run (interactive model picker)
+# CLI chatbot
 python chatbot.py
-
-# Run with specific model
 python chatbot.py --model qwen/qwen3-32b
-python chatbot.py -m openai/gpt-oss-20b -e high
-python chatbot.py --show-comparison
+
+# Streamlit UI (Actor-Director)
+streamlit run app.py
 ```
 
-Requires `GROQ_API_KEY` environment variable (free from console.groq.com/keys).
+Requires `GROQ_API_KEY`. Optional: `OPENAI_API_KEY` for Director (GPT-4.1-nano).
 
 ## Architecture
 
-Everything lives in `chatbot.py` (~550 lines):
+```
+groq-chatbot/
+├── chatbot.py               # CLI entry point (~920 lines, standalone)
+├── app.py                   # Streamlit UI with Actor-Director split layout
+├── groq_engine.py           # GroqEngine wrapper (backward compat, delegates to provider)
+├── director.py              # Director: JSON analysis engine + DirectorResult
+├── orchestrator.py          # Parallel Actor+Director via ThreadPoolExecutor
+├── providers/
+│   ├── __init__.py          # Package exports
+│   ├── base.py              # LLMProvider ABC, StreamChunk, ModelInfo, UsageStats
+│   ├── groq_provider.py     # Groq implementation (streaming + JSON)
+│   ├── openai_provider.py   # OpenAI implementation (GPT-4.1 family)
+│   └── registry.py          # Auto-discovers available providers by API key
+├── schemas/
+│   └── director_default.json # Default Director output schema
+└── requirements.txt
+```
 
-- **`MODELS` dict** (top of file): Registry of supported models with their capabilities, reasoning types, and pricing. Each model has a `reasoning_type` that determines API parameter style.
-- **`GroqChatbot` class**: Core chat engine. Manages conversation history, builds model-specific API params via `_build_request_params()`, and handles streaming in `stream_response()`.
-- **Two reasoning paradigms**: Qwen3 uses `reasoning_format` param with `<think>` tag parsing in the stream. GPT-OSS models use `include_reasoning` param with a separate `delta.reasoning` field. The streaming logic in `stream_response()` handles both.
-- **`C` class**: ANSI color constants for terminal output.
-- **In-chat commands**: Handled in the `run()` method's main loop (`/model`, `/effort`, `/reasoning`, `/clear`, `/compare`, `/help`, `/quit`).
+### Key Modules
+
+- **`providers/base.py`**: `LLMProvider` ABC with `stream_chat()` (Actor) and `json_chat()` (Director). All providers implement this.
+- **`providers/registry.py`**: `ProviderRegistry` discovers providers from installed packages + env vars. `find_default_director()` picks the best Director model (prefers gpt-4.1-nano).
+- **`groq_engine.py`**: `GroqEngine` class wraps `GroqProvider` with conversation history + cumulative stats. `MODELS` dict is backward-compatible. Both `app.py` and `chatbot.py` import from here.
+- **`director.py`**: `Director` class takes a provider + schema, sends conversation to Director model, returns `DirectorResult` with `.data`, `.follow_ups`, `.key_entities`, `.confidence`.
+- **`orchestrator.py`**: `Orchestrator` runs Actor (streaming, main thread) + Director (JSON, background thread) in parallel. `SessionStats` tracks TTFT history, cost breakdown.
+- **`app.py`**: Streamlit UI. Chat mode has 70/30 split (Actor stream | Director insights panel). Director follow-ups are clickable buttons. Session stats in sidebar.
+
+### Provider Model IDs
+
+- Groq: `qwen/qwen3-32b`, `openai/gpt-oss-20b`, `openai/gpt-oss-120b`
+- OpenAI: `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`
 
 ## Key Details
 
-- Only dependency: `groq>=0.28.0`
 - Python 3.10+ required
-- No tests, no linter config, no build system — it's a standalone script
+- Core dependency: `groq>=0.28.0`. Optional: `openai>=1.30.0`
+- `chatbot.py` is still standalone (imports only `groq`, not the provider layer)
+- No tests, no linter config, no build system

@@ -13,7 +13,12 @@
       "Bash(python3 -c \"import ast; ast.parse\\(open\\(''groq_engine.py''\\).read\\(\\)\\); print\\(''groq_engine.py: OK''\\)\")",
       "Bash(python3 -c \"import ast; ast.parse\\(open\\(''app.py''\\).read\\(\\)\\); print\\(''app.py: OK''\\)\")",
       "Bash(python3 -c \"import ast; ast.parse\\(open\\(''chatbot.py''\\).read\\(\\)\\); print\\(''chatbot.py: OK''\\)\")",
-      "Bash(pip3 install:*)"
+      "Bash(pip3 install:*)",
+      "Bash(python3:*)",
+      "Bash(GROQ_API_KEY=test python3 -c \"\nfrom providers.registry import ProviderRegistry\n\nreg = ProviderRegistry\\(\\)\nreg.discover\\(\\)\nprint\\('Providers with GROQ key:', list\\(reg.list_providers\\(\\).keys\\(\\)\\)\\)\nprint\\('Models:', [\\(m.provider, m.id, m.roles\\) for m in reg.list_all_models\\(\\)]\\)\ndd = reg.find_default_director\\(\\)\nif dd:\n    print\\(f'Default director: {dd[0].name}/{dd[1].id}'\\)\nelse:\n    print\\('Director: Groq fallback check...'\\)\n    for m in reg.list_director_models\\(\\):\n        print\\(f'  candidate: {m.id}'\\)\n\")",
+      "Bash(/Users/viditparashar/Desktop/groq-chatbot/.venv/bin/pip install:*)",
+      "Bash(.venv/bin/python -c \"\nimport py_compile\nfiles = [\n    'chatbot.py', 'app.py', 'groq_engine.py', 'director.py',\n    'orchestrator.py', 'benchmark.py',\n    'providers/__init__.py', 'providers/base.py',\n    'providers/groq_provider.py', 'providers/openai_provider.py',\n    'providers/anthropic_provider.py', 'providers/google_provider.py',\n    'providers/registry.py',\n]\nfor f in files:\n    py_compile.compile\\(f, doraise=True\\)\n    print\\(f'  ✅ {f}'\\)\nprint\\(f'\\\\nAll {len\\(files\\)} files compile on Python 3.13!'\\)\n\")",
+      "Bash(.venv/bin/python -c \"import py_compile; py_compile.compile\\('app.py', doraise=True\\); print\\('app.py compiles OK'\\)\")"
     ]
   },
   "enabledPlugins": {
