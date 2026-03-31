@@ -52,6 +52,13 @@ def init_state():
             "director_passes": 0,
             "director_total": 0,
         },
+        "cache_tracker": {
+            "last_request_time": None,  # timestamp of last API call
+            "cache_warm": False,
+            "total_cached_tokens": 0,
+            "total_prompt_tokens": 0,
+            "estimated_savings": 0.0,
+        },
         "next_prompt": None,      # for clickable follow-ups
     }
     for k, v in defaults.items():
@@ -106,6 +113,17 @@ about that answer — intent, entities, follow-ups, guardrails.
 - **Director is optional** — disable it for pure streaming mode
 - **Director adds cost** — but GPT-4.1 Nano is only ~$0.0001 per turn
 - **Follow-up suggestions** from the Director are clickable — guided conversation
+
+### Prompt Caching
+
+| | Groq | OpenAI |
+|---|---|---|
+| **TTL** | 2 hours | 5-10 min |
+| **Min tokens** | 128-1024 (varies) | 1,024 |
+| **Discount** | 50% off cached input | 50% off cached input |
+| **Models** | GPT-OSS 20B, 120B | All GPT-4.1 |
+
+Cached tokens don't count toward rate limits on Groq.
 """)
 
 
@@ -392,6 +410,39 @@ with st.sidebar:
 
     st.divider()
 
+    # ── Cache Status ──
+    st.subheader("Prompt Cache")
+    ct = st.session_state.cache_tracker
+    if ct["last_request_time"]:
+        import time as _time
+        elapsed = _time.time() - ct["last_request_time"]
+        # Groq TTL = 2 hours (7200s), OpenAI TTL = 5-10 min (~600s)
+        groq_remaining = max(0, 7200 - elapsed)
+        openai_remaining = max(0, 600 - elapsed)
+
+        if groq_remaining > 0:
+            groq_mins = int(groq_remaining // 60)
+            st.caption(f"Groq cache: **{groq_mins}m** remaining (TTL 2hr)")
+            st.progress(groq_remaining / 7200)
+        else:
+            st.caption("Groq cache: **expired**")
+
+        if openai_remaining > 0:
+            openai_mins = int(openai_remaining // 60)
+            st.caption(f"OpenAI cache: **{openai_mins}m** remaining (TTL ~10m)")
+            st.progress(openai_remaining / 600)
+        else:
+            st.caption("OpenAI cache: **expired**")
+
+        if ct["total_prompt_tokens"] > 0:
+            rate = ct["total_cached_tokens"] * 100 // ct["total_prompt_tokens"]
+            st.caption(f"Hit rate: {rate}% ({ct['total_cached_tokens']:,}/{ct['total_prompt_tokens']:,} tokens)")
+            st.caption(f"Savings: ~${ct['estimated_savings']:.4f}")
+    else:
+        st.caption("No requests yet")
+
+    st.divider()
+
     # ── Session Stats ──
     st.subheader("Session Stats")
     ss = st.session_state.session_stats
@@ -590,6 +641,19 @@ if mode == "Chat":
                     ss = st.session_state.session_stats
                     ss["turn_count"] += 1
                     ss["ttft_history"].append(final_stats.get("ttft_ms", 0))
+
+                    # Update cache tracker
+                    import time as _time
+                    ct = st.session_state.cache_tracker
+                    ct["last_request_time"] = _time.time()
+                    cached = final_stats.get("cached_tokens", 0)
+                    prompt_t = final_stats.get("prompt_tokens", 0)
+                    ct["total_cached_tokens"] += cached
+                    ct["total_prompt_tokens"] += prompt_t
+                    if cached > 0:
+                        ct["cache_warm"] = True
+                        # 50% discount on cached input tokens
+                        ct["estimated_savings"] += (cached / 1_000_000) * 0.15 * 0.5
 
         # Collect Director result
         if director_future and director_col:
